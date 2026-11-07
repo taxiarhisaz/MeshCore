@@ -1,1 +1,43 @@
+name: Build RAK4631 companion BLE (no user button)
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Remove user button pins from the RAK4631 BLE companion build
+        run: |
+          python - <<'PY'
+          path = "variants/rak4631/platformio.ini"
+          out, in_section, removed = [], False, 0
+          for line in open(path).read().splitlines(keepends=True):
+              if line.startswith("["):
+                  in_section = line.strip() == "[env:RAK_4631_companion_radio_ble]"
+              if in_section and ("PIN_USER_BTN=" in line or "PIN_USER_BTN_ANA=" in line):
+                  removed += 1
+                  continue
+              out.append(line)
+          open(path, "w").write("".join(out))
+          print("Removed lines:", removed)
+          assert removed == 2, "Expected to remove 2 lines"
+          PY
+
+      - name: Build
+        run: pio run -e RAK_4631_companion_radio_ble
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: rak4631-companion-ble-no-button
+          path: .pio/build/RAK_4631_companion_radio_ble/firmware.*
