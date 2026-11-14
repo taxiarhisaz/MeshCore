@@ -1,0 +1,67 @@
+name: Build RAK4631 companion USB (no user button)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install platformio intelhex
+
+      - name: Remove user button pins from the RAK4631 USB companion build
+        run: |
+          python - <<'PY'
+          path = "variants/rak4631/platformio.ini"
+          out, in_section, removed = [], False, 0
+          for line in open(path).read().splitlines(keepends=True):
+              if line.startswith("["):
+                  in_section = line.strip() == "[env:RAK_4631_companion_radio_usb]"
+              if in_section and ("PIN_USER_BTN=" in line or "PIN_USER_BTN_ANA=" in line):
+                  removed += 1
+                  continue
+              out.append(line)
+          open(path, "w").write("".join(out))
+          print("Removed lines:", removed)
+          assert removed == 2, "Expected to remove 2 lines"
+          PY
+
+      - name: Build
+        run: pio run -e RAK_4631_companion_radio_usb
+
+      - name: Convert firmware.hex to UF2
+        run: |
+          python - <<'PY'
+          import struct
+          from intelhex import IntelHex
+          d = ".pio/build/RAK_4631_companion_radio_usb/"
+          ih = IntelHex(d + "firmware.hex")
+          start, end = ih.minaddr(), ih.maxaddr() + 1
+          assert start == 0x26000, hex(start)
+          data = ih.tobinarray(start=start, end=end - 1).tobytes()
+          if len(data) % 256:
+              data += b"\xff" * (256 - len(data) % 256)
+          FAMILY = 0xADA52840
+          n = len(data) // 256
+          out = bytearray()
+          for i in range(n):
+              payload = data[i * 256:(i + 1) * 256]
+              hdr = struct.pack("<IIIIIIII", 0x0A324655, 0x9E5D5157, 0x2000,
+                                start + i * 256, 256, i, n, FAMILY)
+              out += hdr + payload + b"\x00" * (476 - 256) + struct.pack("<I", 0x0AB16F30)
+          open(d + "rak4631_companion_usb_no_button.uf2", "wb").write(out)
+          print(n, "blocks")
+          PY
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: rak4631-companion-usb-no-button
+          path: .pio/build/RAK_4631_companion_radio_usb/rak4631_companion_usb_no_button.uf2
